@@ -1,3 +1,4 @@
+import VoiceCallButton from './VoiceCallButton';
 import React, { useState, useRef, useEffect } from 'react';
 import {
   X,
@@ -361,7 +362,10 @@ export const ChatAssistantModal: React.FC<ChatAssistantModalProps> = ({
           )}
         </div>
 
-        {/* Chat Input Bar */}
+                <div className="px-3 pb-2 shrink-0">
+          <VoiceCallButton />
+        </div>
+{/* Chat Input Bar */}
         <div className="p-3 border-t border-slate-100 bg-white shrink-0">
           <form
             onSubmit={(e) => {
