@@ -669,15 +669,277 @@ Rules:
 
 Output valid JSON following the schema.
 `;
-    console.log('chat request body:', JSON.stringify(req.body).slice(0, 300));
-    const response: any = await Promise.race([
-      ai.models.generateContent({
-        model: 'gemini-3.5-flash',
-        contents,
-        config: { systemInstruction, temperature: 0.3 },
-      }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Gemini timeout')), 6000)),
-    ]);
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.5-flash',
+      contents: promptText,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            scenarioId: { type: Type.STRING },
+            title: { type: Type.STRING },
+            location: { type: Type.STRING },
+            severity: { type: Type.STRING },
+            severityColor: { type: Type.STRING },
+            summary: { type: Type.STRING },
+            tab1_warningSigns: {
+              type: Type.OBJECT,
+              properties: {
+                erVisits24h: { type: Type.NUMBER },
+                erVisitsBaseline: { type: Type.NUMBER },
+                erIncreasePercent: { type: Type.NUMBER },
+                topSymptoms: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      name: { type: Type.STRING },
+                      percentage: { type: Type.NUMBER },
+                      description: { type: Type.STRING },
+                    },
+                    required: ['name', 'percentage', 'description'],
+                  },
+                },
+                pharmacySpikes: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      item: { type: Type.STRING },
+                      changePercent: { type: Type.NUMBER },
+                      status: { type: Type.STRING },
+                    },
+                    required: ['item', 'changePercent', 'status'],
+                  },
+                },
+                clinicAlerts: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      name: { type: Type.STRING },
+                      capacityPercent: { type: Type.NUMBER },
+                      currentWaitTime: { type: Type.STRING },
+                      status: { type: Type.STRING },
+                      statusType: { type: Type.STRING },
+                      recommendation: { type: Type.STRING },
+                    },
+                    required: ['name', 'capacityPercent', 'currentWaitTime', 'status', 'statusType', 'recommendation'],
+                  },
+                },
+                plainEnglishTakeaway: { type: Type.STRING },
+              },
+              required: ['erVisits24h', 'erVisitsBaseline', 'erIncreasePercent', 'topSymptoms', 'pharmacySpikes', 'clinicAlerts', 'plainEnglishTakeaway'],
+            },
+            tab2_identifyIllness: {
+              type: Type.OBJECT,
+              properties: {
+                likelyCauses: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      name: { type: Type.STRING },
+                      matchPercent: { type: Type.NUMBER },
+                      plainEnglish: { type: Type.STRING },
+                      spreadMethod: { type: Type.STRING },
+                      duration: { type: Type.STRING },
+                    },
+                    required: ['name', 'matchPercent', 'plainEnglish', 'spreadMethod', 'duration'],
+                  },
+                },
+                safetyGearNeeded: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      item: { type: Type.STRING },
+                      priority: { type: Type.STRING },
+                      advice: { type: Type.STRING },
+                    },
+                    required: ['item', 'priority', 'advice'],
+                  },
+                },
+                panicBuyingAndRumorAlert: {
+                  type: Type.OBJECT,
+                  properties: {
+                    rumorDetected: { type: Type.STRING },
+                    debunkFact: { type: Type.STRING },
+                    pharmacyDirective: { type: Type.STRING },
+                  },
+                  required: ['rumorDetected', 'debunkFact', 'pharmacyDirective'],
+                },
+              },
+              required: ['likelyCauses', 'safetyGearNeeded', 'panicBuyingAndRumorAlert'],
+            },
+            tab3_hospitalSupplies: {
+              type: Type.OBJECT,
+              properties: {
+                totalAvailableBeds: { type: Type.NUMBER },
+                projectionDays: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+                projections: {
+                  type: Type.OBJECT,
+                  properties: {
+                    none: {
+                      type: Type.OBJECT,
+                      properties: {
+                        label: { type: Type.STRING },
+                        description: { type: Type.STRING },
+                        peakBeds: { type: Type.NUMBER },
+                        bedsNeeded: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+                      },
+                      required: ['label', 'description', 'peakBeds', 'bedsNeeded'],
+                    },
+                    targeted: {
+                      type: Type.OBJECT,
+                      properties: {
+                        label: { type: Type.STRING },
+                        description: { type: Type.STRING },
+                        peakBeds: { type: Type.NUMBER },
+                        bedsNeeded: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+                      },
+                      required: ['label', 'description', 'peakBeds', 'bedsNeeded'],
+                    },
+                    strict: {
+                      type: Type.OBJECT,
+                      properties: {
+                        label: { type: Type.STRING },
+                        description: { type: Type.STRING },
+                        peakBeds: { type: Type.NUMBER },
+                        bedsNeeded: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+                      },
+                      required: ['label', 'description', 'peakBeds', 'bedsNeeded'],
+                    },
+                  },
+                  required: ['none', 'targeted', 'strict'],
+                },
+                nearbyTransfers: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      hospital: { type: Type.STRING },
+                      distance: { type: Type.STRING },
+                      availableOxygenTanks: { type: Type.NUMBER },
+                      ventilators: { type: Type.NUMBER },
+                      staffAvailable: { type: Type.STRING },
+                      status: { type: Type.STRING },
+                    },
+                    required: ['hospital', 'distance', 'availableOxygenTanks', 'ventilators', 'staffAvailable', 'status'],
+                  },
+                },
+              },
+              required: ['totalAvailableBeds', 'projectionDays', 'projections', 'nearbyTransfers'],
+            },
+            tab4_actionPlan: {
+              type: Type.OBJECT,
+              properties: {
+                perspectives: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      role: { type: Type.STRING },
+                      icon: { type: Type.STRING },
+                      quote: { type: Type.STRING },
+                    },
+                    required: ['role', 'icon', 'quote'],
+                  },
+                },
+                readyDocuments: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      id: { type: Type.STRING },
+                      title: { type: Type.STRING },
+                      audience: { type: Type.STRING },
+                      category: { type: Type.STRING },
+                      summary: { type: Type.STRING },
+                      fullText: { type: Type.STRING },
+                    },
+                    required: ['id', 'title', 'audience', 'category', 'summary', 'fullText'],
+                  },
+                },
+              },
+              required: ['perspectives', 'readyDocuments'],
+            },
+          },
+          required: [
+            'scenarioId',
+            'title',
+            'location',
+            'severity',
+            'severityColor',
+            'summary',
+            'tab1_warningSigns',
+            'tab2_identifyIllness',
+            'tab3_hospitalSupplies',
+            'tab4_actionPlan',
+          ],
+        },
+      },
+    });
+
+    const parsed = JSON.parse(response.text || '{}');
+    return res.json(parsed);
+  } catch (error: any) {
+    console.error('Error analyzing outbreak:', error);
+    // Graceful fallback to default scenario to guarantee zero user friction
+    const fallback = DEFAULT_SCENARIOS_DATA[req.body.scenarioId] || DEFAULT_SCENARIOS_DATA.respiratory;
+    return res.json(fallback);
+  }
+});
+
+// Outbreak Chat Assistant Endpoint (Multi-turn verification & anti-misinformation Q&A)
+app.post('/api/chat', async (req, res) => {
+  try {
+    const { message, history, currentScenario } = req.body;
+
+    if (!ai || !apiKey) {
+      // Deterministic supportive response if no API key
+      return res.json({
+        reply: `Here is the verified health guidance for ${currentScenario?.title || 'this situation'}: Rest at home if you have a fever, stay well-hydrated, and avoid taking unnecessary antibiotics without medical consultation. If you experience severe breathing difficulty or confusion, contact emergency care immediately.`,
+      });
+    }
+
+    const systemInstruction = `
+You are the ZEROHOUR Outbreak Response Public Health Assistant.
+Current Outbreak Context: ${currentScenario?.title || 'Active Outbreak Alert'} in ${currentScenario?.location || 'local community'}.
+Summary: ${currentScenario?.summary || 'Respiratory and fever cluster'}.
+
+Core Guidelines:
+1. Speak in plain, calm, everyday English.
+2. Answer in 2 to 3 short, direct sentences.
+3. ZERO TOLERANCE FOR MISINFORMATION: Debunk unproven home cures, panic remedies, and hoarding. If the user asks about antibiotics for viral illnesses, firmly explain that antibiotics only fight bacteria and will not cure viruses.
+4. Always prioritize patient safety and reassure the public.
+`;
+
+    const contents: any[] = [];
+    if (Array.isArray(history)) {
+      for (const turn of history.slice(-6)) {
+        contents.push({
+          role: turn.role === 'user' ? 'user' : 'model',
+          parts: [{ text: turn.text }],
+        });
+      }
+    }
+    contents.push({
+      role: 'user',
+      parts: [{ text: message }],
+    });
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.5-flash',
+      contents,
+      config: {
+        systemInstruction,
+        temperature: 0.3,
+      },
+    });
+
     return res.json({ reply: response.text });
   } catch (err: any) {
     console.error('Chat error:', err);
@@ -689,21 +951,18 @@ Output valid JSON following the schema.
 
 // Start Express server and connect Vite in development
 async function startServer() {
-app.post('/api/bolna-session', async (req, res) => {
-  try {
-    const r = await fetch('https://api.bolna.ai/web-call/session', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.BOLNA_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ agent_id: process.env.BOLNA_AGENT_ID }),
-    });
-    res.status(r.status).type('json').send(await r.text());
-  } catch (e) {
-    res.status(500).json({ error: 'Could not start call' });
-  }
-});
+  app.post('/api/bolna-session', async (req, res) => {
+    try {
+      const r = await fetch('https://api.bolna.ai/web-call/session', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + process.env.BOLNA_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent_id: process.env.BOLNA_AGENT_ID }),
+      });
+      res.status(r.status).type('json').send(await r.text());
+    } catch (e) {
+      res.status(500).json({ error: 'Could not start call' });
+    }
+  });
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
