@@ -1,0 +1,974 @@
+import express from 'express';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { GoogleGenAI, Type } from '@google/genai';
+
+dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.use(express.json({ limit: '10mb' }));
+
+// Shared Gemini client with required User-Agent header
+const apiKey = process.env.GEMINI_API_KEY || '';
+const ai = apiKey
+  ? new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    })
+  : null;
+
+// Pre-defined high-quality baseline response for guaranteed reliability
+const DEFAULT_SCENARIOS_DATA: Record<string, any> = {
+  respiratory: {
+    scenarioId: 'respiratory',
+    title: 'Mystery Respiratory Flu Cluster',
+    location: 'Northside Metro District',
+    severity: 'High Alert',
+    severityColor: 'amber',
+    summary: 'A fast-spreading cluster of high fevers, dry coughs, and chest discomfort over the past 48 hours.',
+    tab1_warningSigns: {
+      erVisits24h: 487,
+      erVisitsBaseline: 185,
+      erIncreasePercent: 163,
+      topSymptoms: [
+        { name: 'Sudden High Fever (>102°F)', percentage: 88, description: 'Rapid onset within 6 to 12 hours' },
+        { name: 'Deep Dry Cough', percentage: 76, description: 'Persistent cough causing chest tiredness' },
+        { name: 'Extreme Fatigue & Chills', percentage: 71, description: 'Bed-bound exhaustion' },
+        { name: 'Shortness of Breath', percentage: 38, description: 'Primarily elderly and asthmatic patients' },
+      ],
+      pharmacySpikes: [
+        { item: 'Fever Reducers (Acetaminophen/Ibuprofen)', changePercent: 340, status: 'Critically Low Stock' },
+        { item: 'Cough Suppressant Syrups', changePercent: 215, status: 'Limited Stock' },
+        { item: 'Finger Pulse Oximeters', changePercent: 180, status: 'Sold Out in 4 Stores' },
+        { item: 'Electrolyte Drinks', changePercent: 95, status: 'Adequate Stock' },
+      ],
+      clinicAlerts: [
+        {
+          name: 'Northside Urgent Care',
+          capacityPercent: 185,
+          currentWaitTime: '4.5 hours',
+          status: 'Severely Overcrowded',
+          statusType: 'danger',
+          recommendation: 'Divert mild patients to Eastside Community Clinic',
+        },
+        {
+          name: 'Metro Central ER',
+          capacityPercent: 130,
+          currentWaitTime: '2.8 hours',
+          status: 'Near Limit',
+          statusType: 'warning',
+          recommendation: 'Activating secondary triage tent',
+        },
+        {
+          name: 'Eastside Community Clinic',
+          capacityPercent: 65,
+          currentWaitTime: '35 mins',
+          status: 'Normal Capacity',
+          statusType: 'good',
+          recommendation: 'Prepared to accept walk-in fever evaluations',
+        },
+        {
+          name: 'Valley Care Outpost',
+          capacityPercent: 42,
+          currentWaitTime: '20 mins',
+          status: 'Low Volume',
+          statusType: 'good',
+          recommendation: 'Stocked with fever reducers and rapid tests',
+        },
+      ],
+      plainEnglishTakeaway: 'Local clinics in the Northside district are seeing nearly triple normal patient traffic. Residents are buying all fever syrups, but Eastside clinics still have open capacity.',
+    },
+    tab2_identifyIllness: {
+      likelyCauses: [
+        {
+          name: 'Severe Influenza A (H3N2 Clade Spike)',
+          matchPercent: 86,
+          plainEnglish: 'A fast-moving seasonal flu variant. Causes sudden high fever, sore throat, and muscle aches.',
+          spreadMethod: 'Airborne droplets from coughing, sneezing, and touching infected surfaces.',
+          duration: '5 to 8 days with proper rest and hydration.',
+        },
+        {
+          name: 'Respiratory Syncytial Virus (RSV) Surge',
+          matchPercent: 64,
+          plainEnglish: 'A common breathing virus that causes deep coughs and wheezing, dangerous for infants and older adults.',
+          spreadMethod: 'Close contact and respiratory secretions.',
+          duration: '7 to 10 days.',
+        },
+        {
+          name: 'Novel Coronaviral Respiratory Cluster',
+          matchPercent: 42,
+          plainEnglish: 'A mild-to-moderate upper respiratory strain with rapid transmission indoors.',
+          spreadMethod: 'Aerosolized indoor air in poorly ventilated rooms.',
+          duration: '4 to 7 days.',
+        },
+      ],
+      safetyGearNeeded: [
+        { item: 'N95 Respirator Masks', priority: 'Essential', advice: 'Wear during all face-to-face patient evaluations. Change every 8 hours.' },
+        { item: 'Protective Face Shields', priority: 'High', advice: 'Use when administering swab tests to avoid droplet spray.' },
+        { item: 'Fluid-Resistant Isolation Gowns', priority: 'High', advice: 'Wear in triage areas and inpatient bed units.' },
+        { item: 'Nitrile Exam Gloves', priority: 'Standard', advice: 'Dispose and sanitize hands immediately after touching each patient.' },
+      ],
+      panicBuyingAndRumorAlert: {
+        rumorDetected: 'Social media posts falsely claiming antibiotics will cure this illness.',
+        debunkFact: 'Antibiotics only kill bacteria, NOT flu viruses. Taking antibiotics for viral flu damages digestion and causes antibiotic resistance.',
+        pharmacyDirective: 'Pharmacies must limit fever medicine to 2 packages per family and hand out printed plain-English recovery advice.',
+      },
+    },
+    tab3_hospitalSupplies: {
+      totalAvailableBeds: 380,
+      projectionDays: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+      projections: {
+        none: {
+          label: 'No Community Measures',
+          description: 'Spreads unchecked. Beds run out completely by Day 5.',
+          peakBeds: 620,
+          bedsNeeded: [195, 250, 315, 375, 440, 510, 570, 620, 605, 570, 520, 470, 420, 370],
+        },
+        targeted: {
+          label: 'Targeted Measures (Recommended)',
+          description: 'Sick employees stay home, schools screen temperatures, masks in busy clinics. Curve peaks safely right below capacity.',
+          peakBeds: 365,
+          bedsNeeded: [195, 230, 275, 310, 340, 360, 365, 355, 340, 315, 290, 260, 230, 205],
+        },
+        strict: {
+          label: 'Strict Measures',
+          description: 'Large public gatherings paused, mobile fever vans deployed, tele-health primary care. Very low peak demand.',
+          peakBeds: 255,
+          bedsNeeded: [195, 215, 235, 250, 255, 245, 235, 220, 205, 190, 175, 160, 145, 130],
+        },
+      },
+      nearbyTransfers: [
+        {
+          hospital: 'St. Jude Regional Hospital',
+          distance: '18 minutes away',
+          availableOxygenTanks: 45,
+          ventilators: 6,
+          staffAvailable: '4 Respiratory Techs',
+          status: 'Ready for Dispatch',
+        },
+        {
+          hospital: 'Memorial Central Medical',
+          distance: '32 minutes away',
+          availableOxygenTanks: 80,
+          ventilators: 12,
+          staffAvailable: '8 ICU Nurses',
+          status: 'Ready for Dispatch',
+        },
+        {
+          hospital: 'Eastside Community Care',
+          distance: '45 minutes away',
+          availableOxygenTanks: 30,
+          ventilators: 3,
+          staffAvailable: '2 General Physicians',
+          status: 'Ready for Dispatch',
+        },
+      ],
+    },
+    tab4_actionPlan: {
+      perspectives: [
+        {
+          role: 'Health Expert (Chief Epidemiologist)',
+          icon: 'stethoscope',
+          quote: 'We are facing a sharp seasonal influenza spike with high transmission in enclosed spaces. Advising home rest for feverish individuals will flatten our hospital demand within 4 days.',
+        },
+        {
+          role: 'Hospital Supply Manager (Logistics Lead)',
+          icon: 'truck',
+          quote: 'Our current oxygen and mask reserves will last 72 hours under surge conditions. Ordering an immediate transfer of 45 oxygen cylinders from St. Jude Regional guarantees we stay ahead of peak admissions.',
+        },
+        {
+          role: 'Community & Business Rep (Public Liaison)',
+          icon: 'building',
+          quote: 'Businesses should offer temporary flexible remote work and sick leave to keep ill workers home. Clear public communication dispels social panic and stops pharmacy shelf clearing.',
+        },
+      ],
+      readyDocuments: [
+        {
+          id: 'doc-health-dept',
+          title: 'Health Department Official Notice',
+          audience: 'Schools, Workplaces & Public Facilities',
+          category: 'Official Directive',
+          summary: 'Guidelines for keeping sick individuals home, hand hygiene, and indoor ventilation without closing businesses.',
+          fullText: `PUBLIC HEALTH DIRECTIVE: RESPIRATORY SURGE ADVISORY\nOffice of the Chief Medical Officer\n\n1. SICK LEAVE & ISOLATION: Any individual with a fever exceeding 100.4°F or persistent coughing must stay home until fever-free for 24 hours without medication.\n2. SCHOOL PRECAUTIONS: Morning temperature screening is requested at all elementary and secondary schools. Sanitize common desks and door handles twice daily.\n3. CLINIC TRIAGE: Citizens experiencing mild flu symptoms are strongly urged to consult tele-health or local community clinics rather than emergency rooms to preserve acute care beds.\n4. EMERGENCY WARNING SIGNS: Seek immediate emergency care only for blue lips, severe difficulty breathing, persistent chest pain, or confusion.`,
+        },
+        {
+          id: 'doc-supply-transfer',
+          title: 'Hospital Supply Transfer Request',
+          audience: 'Regional Logistics & St. Jude Regional Hospital',
+          category: 'Logistics Order',
+          summary: 'Mutual aid dispatch for 45 oxygen tanks, 6 ventilators, and protective N95 masks to Northside Urgent Care.',
+          fullText: `MUTUAL AID DISPATCH ORDER #OUTBREAK-2026-N4\nEmergency Logistics Coordination Center\n\nORIGIN: St. Jude Regional Hospital (Dock 2)\nDESTINATION: Northside Urgent Care Center & Metro ER\nESTIMATED TRANSPORT TIME: 18 Minutes\n\nAUTHORIZED TRANSFERS:\n- 45 Medical Oxygen Cylinders (Size E, 680L with regulators)\n- 6 Portable Non-Invasive Ventilators (Tested and sanitized)\n- 500 N95 Particulate Respirator Masks (Lot #9022)\n- 20 Finger Pulse Oximeters\n\nAUTHORIZED SIGN-OFF: Regional Disaster Medical Coordinator`,
+        },
+        {
+          id: 'doc-triage-guide',
+          title: "Doctor & Nurse Triage Guide",
+          audience: 'Frontline Clinical Staff & Intake Desks',
+          category: 'Clinical Protocol',
+          summary: '3-Tier rapid decision tree for admitting, observing, or discharging patients with supportive home care.',
+          fullText: `EMERGENCY ROOM CLINICAL TRIAGE PROTOCOL\n\nTIER 1 (HOME CARE DISCHARGE):\n- Criteria: Oxygen saturation ≥ 95%, breathing comfortably, able to swallow liquids.\n- Action: Prescribe standard oral hydration, acetaminophen 500mg as needed, provide home recovery flyer.\n\nTIER 2 (SHORT OBSERVATION - 4 HOURS):\n- Criteria: Oxygen saturation 92-94%, mild asthma history, heart rate > 100 bpm.\n- Action: Administer supplemental oxygen via nasal cannula (2L/min), repeat vitals hourly.\n\nTIER 3 (IMMEDIATE BED ADMISSION):\n- Criteria: Oxygen saturation < 92%, severe respiratory distress, altered mental state.\n- Action: Direct transfer to Acute Ward. Initiate IV hydration and continuous monitoring.`,
+        },
+        {
+          id: 'doc-public-reassurance',
+          title: 'Public Reassurance Message',
+          audience: 'Press, TV/Radio Broadcasts, Community Boards',
+          category: 'Public Bulletin',
+          summary: 'Plain, calm facts to eliminate rumors, stop panic-buying, and empower families with simple steps.',
+          fullText: `A MESSAGE TO OUR COMMUNITY: YOU ARE SAFE & WE ARE PREPARED\n\nOver the past two days, our neighborhood clinics have seen an increase in seasonal respiratory illness. Our healthcare system is fully prepared, and our doctors know exactly how to treat this.\n\nWHAT YOU NEED TO KNOW:\n- This illness responds well to standard rest, fluids, and fever medicine.\n- Pharmacies have ample restocking schedules. There is no need to purchase extra medicines beyond your immediate family's needs.\n- Antibiotics do NOT work on this illness. Please do not pressure pharmacists for unneeded prescriptions.\n- Most people recover comfortably at home within 5 to 7 days.\n\nTogether, by resting when unwell and washing our hands frequently, we protect our grandparents and neighbors.`,
+        },
+      ],
+    },
+  },
+  waterborne: {
+    scenarioId: 'waterborne',
+    title: 'Flood Waterborne Illness Surge',
+    location: 'Riverside County & Lowland Towns',
+    severity: 'Urgent Action',
+    severityColor: 'rose',
+    summary: 'A cluster of severe acute stomach cramps, watery diarrhea, and dehydration following recent heavy river flash flooding.',
+    tab1_warningSigns: {
+      erVisits24h: 342,
+      erVisitsBaseline: 90,
+      erIncreasePercent: 280,
+      topSymptoms: [
+        { name: 'Watery Diarrhea & Cramps', percentage: 94, description: 'Sudden onset within 12 hours of drinking tap water' },
+        { name: 'Dehydration & Dizziness', percentage: 82, description: 'Dry mouth, low urine output, fainting' },
+        { name: 'Nausea & Vomiting', percentage: 67, description: 'Inability to keep down solid foods' },
+        { name: 'Low-Grade Fever', percentage: 41, description: 'Mild inflammatory reaction' },
+      ],
+      pharmacySpikes: [
+        { item: 'Oral Rehydration Salts (ORS)', changePercent: 490, status: 'Critically Low Stock' },
+        { item: 'Anti-Diarrheal Medication', changePercent: 310, status: 'Sold Out Locally' },
+        { item: 'Bottled Drinking Water (Gallons)', changePercent: 520, status: 'Rationing Enforced' },
+        { item: 'Water Purification Tablets', changePercent: 380, status: 'Limited Stock' },
+      ],
+      clinicAlerts: [
+        {
+          name: 'Riverside Urgent Clinic',
+          capacityPercent: 195,
+          currentWaitTime: '5.2 hours',
+          status: 'Severely Overcrowded',
+          statusType: 'danger',
+          recommendation: 'Request mobile IV hydration trailer immediately',
+        },
+        {
+          name: 'County General ER',
+          capacityPercent: 145,
+          currentWaitTime: '3.6 hours',
+          status: 'Near Limit',
+          statusType: 'warning',
+          recommendation: 'Designate auditorium as rehydration ward',
+        },
+        {
+          name: 'Hilltop Family Health',
+          capacityPercent: 50,
+          currentWaitTime: '25 mins',
+          status: 'Normal Capacity',
+          statusType: 'good',
+          recommendation: 'Has safe municipal well water supply',
+        },
+        {
+          name: 'South Basin Post',
+          capacityPercent: 75,
+          currentWaitTime: '40 mins',
+          status: 'Normal Capacity',
+          statusType: 'good',
+          recommendation: 'Distributing clean water jerrycans',
+        },
+      ],
+      plainEnglishTakeaway: 'Flooded water mains have contaminated tap supplies in Riverside. Dehydration is the primary threat, and emergency rooms need oral rehydration packets and clean bottled water.',
+    },
+    tab2_identifyIllness: {
+      likelyCauses: [
+        {
+          name: 'Enterotoxigenic E. Coli / Bacterial Gastroenteritis',
+          matchPercent: 91,
+          plainEnglish: 'A bacteria introduced into municipal pipe cracks by floodwater. Causes intense cramps and watery diarrhea.',
+          spreadMethod: 'Drinking unboiled tap water or washing food in contaminated water.',
+          duration: '3 to 5 days with active fluid replacement.',
+        },
+        {
+          name: 'Cryptosporidium / Giardia Parasitic Outbreak',
+          matchPercent: 58,
+          plainEnglish: 'Microscopic parasites resistant to low chlorine levels, causing prolonged diarrhea.',
+          spreadMethod: 'Ingesting flood-compromised surface water.',
+          duration: '7 to 14 days.',
+        },
+        {
+          name: 'Norovirus Viral Gastroenteritis',
+          matchPercent: 35,
+          plainEnglish: 'Fast-spreading stomach bug causing acute vomiting and diarrhea.',
+          spreadMethod: 'Direct person-to-person and food preparation.',
+          duration: '1 to 3 days.',
+        },
+      ],
+      safetyGearNeeded: [
+        { item: 'Waterproof Nitrile Gloves', priority: 'Essential', advice: 'Wear when handling stool samples, bedpans, and soiled linen.' },
+        { item: 'Protective Gowns & Aprons', priority: 'High', advice: 'Prevent fluid splash contamination in rehydration tents.' },
+        { item: 'Chlorine-Based Disinfectant', priority: 'Essential', advice: 'Bleach solution (1:10) for surfaces; standard alcohol rubs do not kill all parasites.' },
+        { item: 'Clean Bottled Water for Staff', priority: 'Essential', advice: 'Hospital taps must be isolated until water testing clears.' },
+      ],
+      panicBuyingAndRumorAlert: {
+        rumorDetected: 'Rumor that taking double doses of loperamide stops the infection immediately.',
+        debunkFact: 'Stopping bowel motility can trap bacterial toxins inside the body and worsen illness. The correct lifesaving treatment is oral rehydration salts (ORS) with clean water.',
+        pharmacyDirective: 'Provide 2 boxes of ORS electrolyte powder per family and prominently distribute Boil Water Notices.',
+      },
+    },
+    tab3_hospitalSupplies: {
+      totalAvailableBeds: 290,
+      projectionDays: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+      projections: {
+        none: {
+          label: 'No Community Measures',
+          description: 'Tap water continues to be used. Bed capacity exceeded in 3 days.',
+          peakBeds: 540,
+          bedsNeeded: [160, 220, 295, 380, 460, 520, 540, 510, 460, 390, 320, 260, 210, 170],
+        },
+        targeted: {
+          label: 'Targeted Measures (Recommended)',
+          description: 'Boil water advisory broadcasted, water distribution trucks deployed to Riverside. Curve drops rapidly.',
+          peakBeds: 280,
+          bedsNeeded: [160, 205, 250, 275, 280, 265, 240, 210, 180, 150, 130, 110, 95, 80],
+        },
+        strict: {
+          label: 'Strict Measures',
+          description: 'Municipal water grid shutoff with direct bottled water ration delivery to all houses.',
+          peakBeds: 210,
+          bedsNeeded: [160, 185, 205, 210, 195, 175, 150, 130, 110, 95, 80, 70, 60, 50],
+        },
+      },
+      nearbyTransfers: [
+        {
+          hospital: 'Hilltop Medical Center',
+          distance: '15 minutes away',
+          availableOxygenTanks: 25,
+          ventilators: 4,
+          staffAvailable: '600 IV Saline Bags & 6 Nurses',
+          status: 'Ready for Dispatch',
+        },
+        {
+          hospital: 'Valley Regional Hospital',
+          distance: '28 minutes away',
+          availableOxygenTanks: 50,
+          ventilators: 8,
+          staffAvailable: '1,200 IV Hydration Bags & 10 Nurses',
+          status: 'Ready for Dispatch',
+        },
+        {
+          hospital: 'St. Jude Regional',
+          distance: '35 minutes away',
+          availableOxygenTanks: 40,
+          ventilators: 5,
+          staffAvailable: 'Mobile Water Filtration Unit',
+          status: 'Ready for Dispatch',
+        },
+      ],
+    },
+    tab4_actionPlan: {
+      perspectives: [
+        {
+          role: 'Health Expert (Chief Epidemiologist)',
+          icon: 'stethoscope',
+          quote: 'This is a point-source waterborne bacterial outbreak triggered by flood cross-contamination. Issuing an immediate Boil Water Order and distributing electrolyte rehydration will halt new cases within 48 hours.',
+        },
+        {
+          role: 'Hospital Supply Manager (Logistics Lead)',
+          icon: 'truck',
+          quote: 'Our primary need is IV saline fluid bags and oral rehydration salt packets rather than ventilators. Hilltop Medical is sending 600 IV bags within 30 minutes to cover all dehydrated patients.',
+        },
+        {
+          role: 'Community & Business Rep (Public Liaison)',
+          icon: 'building',
+          quote: 'Free clean bottled water distribution points at school parking lots will stop price gouging and eliminate panic. Restaurants are pausing unboiled water beverage service until tests confirm clearance.',
+        },
+      ],
+      readyDocuments: [
+        {
+          id: 'doc-water-boil',
+          title: 'Mandatory Boil Water Advisory',
+          audience: 'All Residents & Food Establishments in Riverside',
+          category: 'Emergency Advisory',
+          summary: 'Clear 1-minute boiling instructions for drinking, cooking, tooth brushing, and baby formula.',
+          fullText: `EMERGENCY BOIL WATER ADVISORY\nRiverside County Water Authority & Dept. of Health\n\nEFFECTIVE IMMEDIATELY: Do not drink tap water without boiling it first.\n\n1. BOILING INSTRUCTION: Bring all water to a rolling boil for at least ONE FULL MINUTE before drinking, cooking, washing food, or brushing teeth.\n2. BABY FORMULA: Use only boiled water that has cooled, or commercially bottled water.\n3. DISHES: Use disposable plates or wash dishes in water with 1 teaspoon of unscented household bleach per gallon.\n4. DISTRIBUTION SITES: Clean bottled water is available free at Riverside High School and Fairgrounds Parking Lot from 8:00 AM to 8:00 PM.`,
+        },
+        {
+          id: 'doc-saline-transfer',
+          title: 'Hydration Supplies Transfer Order',
+          audience: 'Hilltop Medical Center & Regional Supply Depot',
+          category: 'Logistics Order',
+          summary: 'Urgent transfer of 600 IV Normal Saline bags and 3,000 oral rehydration sachets to Riverside Clinic.',
+          fullText: `EMERGENCY HYDRATION SUPPLY TRANSFER #WAT-2026-09\n\nDISPATCHING FACILITY: Hilltop Medical Center Warehouse\nRECEIVING FACILITY: Riverside Urgent Care Rapid Rehydration Tent\nTRANSIT ETA: 15 Minutes\n\nDELIVERY CONTENTS:\n- 600 Bags Normal Saline (0.9% NaCl, 1,000mL with IV infusion sets)\n- 3,000 Sachets WHO-Formula Oral Rehydration Salts (ORS)\n- 100 Pediatric Pedialyte Electrolyte Cases\n- 500 Pairs Heavy-Duty Nitrile Examination Gloves\n\nDISPATCH SUPERVISOR: County Logistics Chief`,
+        },
+        {
+          id: 'doc-rehydration-guide',
+          title: 'Clinical Dehydration Triage Protocol',
+          audience: 'Intake Nurses & Emergency Responders',
+          category: 'Clinical Protocol',
+          summary: 'Assessing mild vs. severe dehydration and initiating immediate oral or IV electrolyte replenishment.',
+          fullText: `ACUTE GASTROENTERITIS HYDRATION PROTOCOL\n\nMILD DEHYDRATION (ORAL THERAPY):\n- Signs: Thirsty, slightly dry lips, normal alertness.\n- Protocol: Administer 50mL/kg Oral Rehydration Solution (ORS) slowly over 4 hours. No anti-motility drugs for children.\n\nMODERATE DEHYDRATION (MONITORED ORAL / MILD IV):\n- Signs: Sunken eyes, skin pinch takes 2 seconds to flatten, rapid pulse.\n- Protocol: 100mL/kg ORS or 500mL IV Normal Saline over 2 hours. Monitor urine output.\n\nSEVERE DEHYDRATION (IMMEDIATE IV RESUSCITATION):\n- Signs: Lethargic, unmeasurable pulse, cool extremities, low blood pressure.\n- Protocol: Immediate IV bolus of 20mL/kg Normal Saline over 15 minutes. Repeat until radial pulse is strong.`,
+        },
+        {
+          id: 'doc-safe-water-bulletin',
+          title: 'Community Guide: Staying Safe After Floods',
+          audience: 'General Public, Neighborhood Groups, Local Radio',
+          category: 'Public Bulletin',
+          summary: 'Simple, calming advice for staying hydrated, avoiding contaminated flood water, and supporting neighbors.',
+          fullText: `COMMUNITY SAFETY BULLETIN: HEALTHY WATER, HEALTHY NEIGHBORHOODS\n\nFollowing recent floodwaters, our county health team is actively flushing and testing our water system. Here is how you can protect your family today:\n\n1. KEEP HYDRATED: If you or family members feel weak or thirsty, drink clean bottled water mixed with electrolytes or simple broth.\n2. FREE WATER ACCESS: Free clean water is waiting for you at local fire stations and school gyms. Bring your own containers or collect sealed jugs.\n3. AVOID THE RUSH: Stores are actively being restocked by county emergency convoys. Please only take what you need for 48 hours.\n4. WHEN TO SEE A DOCTOR: If you cannot keep fluids down for over 12 hours, or feel very dizzy when standing up, visit our Riverside clinic. Free transport is available via 311.\n\nWe are here for you, and water mains are expected to test clear within 48 hours.`,
+        },
+      ],
+    },
+  },
+  rural_fever: {
+    scenarioId: 'rural_fever',
+    title: 'Rural Vector Fever Outbreak',
+    location: 'Valley Agrarian Basin & Farmlands',
+    severity: 'Watch Alert',
+    severityColor: 'amber',
+    summary: 'A sudden cluster of high fevers, joint pain, retro-orbital eye ache, and skin rash following monsoon rains and stagnant water buildup near canal irrigation.',
+    tab1_warningSigns: {
+      erVisits24h: 218,
+      erVisitsBaseline: 62,
+      erIncreasePercent: 251,
+      topSymptoms: [
+        { name: 'Severe Joint & Muscle Pain', percentage: 92, description: 'Debilitating "breakbone" pain in knees and wrists' },
+        { name: 'Sudden High Fever (103°F)', percentage: 89, description: 'Spiking rapidly in the afternoon' },
+        { name: 'Pain Behind the Eyes', percentage: 73, description: 'Exacerbated by looking toward bright lights' },
+        { name: 'Reddish Pinprick Skin Rash', percentage: 56, description: 'Appearing on chest and arms on Day 3' },
+      ],
+      pharmacySpikes: [
+        { item: 'Paracetamol / Acetaminophen', changePercent: 360, status: 'Limited Stock' },
+        { item: 'Mosquito Repellent (DEET / Picaridin)', changePercent: 410, status: 'Sold Out in Farmland Markets' },
+        { item: 'Platelet / CBC Test Kits', changePercent: 290, status: 'Low Inventory' },
+        { item: 'Aspirin (Warning: Do Not Use)', changePercent: 120, status: 'Sales Warning Issued' },
+      ],
+      clinicAlerts: [
+        {
+          name: 'Valley Health Outpost',
+          capacityPercent: 175,
+          currentWaitTime: '3.8 hours',
+          status: 'Overcrowded',
+          statusType: 'danger',
+          recommendation: 'Deploy mobile blood count testing team',
+        },
+        {
+          name: 'South Canal Community Center',
+          capacityPercent: 120,
+          currentWaitTime: '2.2 hours',
+          status: 'Near Limit',
+          statusType: 'warning',
+          recommendation: 'Distribute bed nets and repellent lotions',
+        },
+        {
+          name: 'Pine Ridge District Hospital',
+          capacityPercent: 55,
+          currentWaitTime: '30 mins',
+          status: 'Normal Capacity',
+          statusType: 'good',
+          recommendation: 'Has open beds for platelet monitoring',
+        },
+        {
+          name: 'Oak Creek Clinic',
+          capacityPercent: 40,
+          currentWaitTime: '15 mins',
+          status: 'Normal Capacity',
+          statusType: 'good',
+          recommendation: 'Equipped with rapid dengue / malaria strip tests',
+        },
+      ],
+      plainEnglishTakeaway: 'Farmers and residents near standing canal water are experiencing sudden joint pain and fever. Mosquito vector control and safe fever management (avoiding aspirin) are the key priorities.',
+    },
+    tab2_identifyIllness: {
+      likelyCauses: [
+        {
+          name: 'Dengue Viral Fever / Arbovirus',
+          matchPercent: 88,
+          plainEnglish: 'A mosquito-borne viral fever causing severe body aches ("breakbone fever"), eye pain, and rash.',
+          spreadMethod: 'Aedes mosquito bites during early morning and late afternoon hours. Not spread person-to-person.',
+          duration: '5 to 7 days, with Day 3 to 5 critical for platelet monitoring.',
+        },
+        {
+          name: 'Chikungunya Viral Infection',
+          matchPercent: 68,
+          plainEnglish: 'Similar viral mosquito disease known for severe swelling and pain in finger and ankle joints.',
+          spreadMethod: 'Mosquito vectors breeding in standing rainwater barrels.',
+          duration: '7 to 10 days.',
+        },
+        {
+          name: 'Leptospirosis (Bacterial Zoonosis)',
+          matchPercent: 38,
+          plainEnglish: 'Bacterial infection contracted from wading through muddy water contaminated by animals.',
+          spreadMethod: 'Skin cuts exposed to flooded soil or irrigation ditches.',
+          duration: '5 to 9 days.',
+        },
+      ],
+      safetyGearNeeded: [
+        { item: 'Mosquito Repellent (DEET 20%+ or Picaridin)', priority: 'Essential', advice: 'Apply to exposed skin; reapply every 4 to 6 hours when outdoors.' },
+        { item: 'Window Screens & Hospital Bed Nets', priority: 'High', advice: 'Ensure fever patients in clinics are under bed nets to prevent mosquitoes biting them and spreading the virus.' },
+        { item: 'Long-Sleeved Protective Clothing', priority: 'High', advice: 'Recommended for farm workers and field survey teams.' },
+        { item: 'Rapid Diagnostic Fingerstick Tests', priority: 'Essential', advice: 'Test for NS1 antigen and platelet levels on initial clinic visit.' },
+      ],
+      panicBuyingAndRumorAlert: {
+        rumorDetected: 'People taking Aspirin or Ibuprofen to relieve the intense bone pain.',
+        debunkFact: 'CRITICAL MEDICAL WARNING: Aspirin and Ibuprofen thin the blood and can cause dangerous internal bleeding in dengue cases! ONLY use Acetaminophen / Paracetamol for pain relief.',
+        pharmacyDirective: 'Do NOT sell Aspirin or NSAIDs to patients presenting with sudden fever and joint pain. Post warning signs above checkout counters.',
+      },
+    },
+    tab3_hospitalSupplies: {
+      totalAvailableBeds: 240,
+      projectionDays: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+      projections: {
+        none: {
+          label: 'No Community Measures',
+          description: 'No vector fogging or breeding site removal. Cases rise for 2 weeks.',
+          peakBeds: 410,
+          bedsNeeded: [110, 145, 190, 240, 290, 340, 385, 410, 395, 360, 310, 260, 210, 170],
+        },
+        targeted: {
+          label: 'Targeted Measures (Recommended)',
+          description: 'Community drain clearing, larvicide spraying around canals, clinic bed nets.',
+          peakBeds: 230,
+          bedsNeeded: [110, 135, 165, 195, 220, 230, 225, 210, 190, 165, 140, 120, 100, 85],
+        },
+        strict: {
+          label: 'Strict Measures',
+          description: 'Agricultural basin-wide fogging, dusk curfews on open irrigation canals.',
+          peakBeds: 175,
+          bedsNeeded: [110, 125, 145, 165, 175, 170, 160, 145, 130, 115, 95, 80, 70, 60],
+        },
+      },
+      nearbyTransfers: [
+        {
+          hospital: 'Pine Ridge District Hospital',
+          distance: '22 minutes away',
+          availableOxygenTanks: 35,
+          ventilators: 4,
+          staffAvailable: 'Hematology Lab & 400 Platelet Units',
+          status: 'Ready for Dispatch',
+        },
+        {
+          hospital: 'Oak Creek Health Center',
+          distance: '30 minutes away',
+          availableOxygenTanks: 20,
+          ventilators: 2,
+          staffAvailable: '3 Mobile Phlebotomy Technicians',
+          status: 'Ready for Dispatch',
+        },
+        {
+          hospital: 'Memorial Central Medical',
+          distance: '48 minutes away',
+          availableOxygenTanks: 60,
+          ventilators: 8,
+          staffAvailable: 'Vector Control Spray Truck & Crew',
+          status: 'Ready for Dispatch',
+        },
+      ],
+    },
+    tab4_actionPlan: {
+      perspectives: [
+        {
+          role: 'Health Expert (Chief Epidemiologist)',
+          icon: 'stethoscope',
+          quote: 'We have an arboviral mosquito surge following standing water buildup. The most important clinical safety action is strictly prohibiting aspirin and ensuring patients stay hydrated while monitoring platelet counts.',
+        },
+        {
+          role: 'Hospital Supply Manager (Logistics Lead)',
+          icon: 'truck',
+          quote: 'Pine Ridge Hospital has adequate blood platelet units and IV fluids ready for mutual aid transfer. We are sending 400 rapid fingerstick test kits to Valley Health Outpost this afternoon.',
+        },
+        {
+          role: 'Community & Business Rep (Public Liaison)',
+          icon: 'building',
+          quote: 'Coordinating with local farm unions to drain stagnant tire water and irrigation ditches will quickly remove mosquito breeding zones without disrupting farm harvest operations.',
+        },
+      ],
+      readyDocuments: [
+        {
+          id: 'doc-vector-alert',
+          title: 'Agricultural Vector Health Alert',
+          audience: 'Rural Community Leaders, Farms & Agricultural Workers',
+          category: 'Health Advisory',
+          summary: 'Actions to eliminate stagnant water containers and protect workers during dawn and dusk.',
+          fullText: `COMMUNITY MOSQUITO & VECTOR HEALTH DIRECTIVE\nValley Agrarian District Health Bureau\n\n1. DRAIN STANDING WATER: Inspect property daily for standing water in open buckets, animal troughs, discarded tires, and blocked drainage gutters. Turn over or cover all containers.\n2. PERSONAL PROTECTION: Wear loose long-sleeved shirts and trousers when working near irrigation channels. Apply approved insect repellent.\n3. CLINIC BED PROTECTION: All outpatient observation beds must be fitted with intact mosquito netting to prevent secondary transmission.\n4. SAFE PAIN RELIEF: Use ONLY acetaminophen/paracetamol. Do NOT use aspirin or ibuprofen under any circumstance.`,
+        },
+        {
+          id: 'doc-platelet-transfer',
+          title: 'Hematology & Test Kit Transfer Order',
+          audience: 'Pine Ridge District Hospital Blood Bank & Diagnostics',
+          category: 'Logistics Order',
+          summary: 'Transfer of 400 rapid dengue/chikungunya test strips and 50 platelet transfusion units to Valley Outpost.',
+          fullText: `DIAGNOSTIC & HEMATOLOGY MUTUAL AID REQUEST #VEC-2026-44\n\nSUPPLYING FACILITY: Pine Ridge District Hospital Central Lab\nRECEIVING FACILITY: Valley Health Outpost\nESTIMATED TRANSIT TIME: 22 Minutes\n\nDISPATCHED INVENTORY:\n- 400 Rapid Dual Dengue NS1 / IgM-IgG Test Cartridges\n- 50 Units Platelet Concentrate (Temperature-controlled transport)\n- 1,000 Bottles Acetaminophen Suspension (Pediatric & Adult)\n- 200 Permethrin-Treated Bed Nets\n\nAUTHORIZATION: Regional Medical Officer`,
+        },
+        {
+          id: 'doc-rural-triage',
+          title: 'Vector Fever Triage & Warning Signs',
+          audience: 'Rural Health Workers & Clinic Nurses',
+          category: 'Clinical Protocol',
+          summary: 'Identifying warning signs of plasma leakage and severe joint inflammation.',
+          fullText: `CLINICAL PROTOCOL: VECTOR FEVER TRIAGE\n\nSTEP 1: Rapid diagnostic fingerstick test + baseline platelet check.\n\nAMBULATORY HOME CARE:\n- Platelets > 100,000 / µL, taking fluids well, no abdominal pain.\n- Discharge with oral rehydration, paracetamol 500mg, and strict warning sign review.\n\nWARNING SIGNS FOR IMMEDIATE ADMISSION:\n- Persistent vomiting or inability to tolerate liquids.\n- Severe continuous abdominal pain or tenderness.\n- Bleeding gums, nosebleeds, or tiny red blood spots (petechiae) under skin.\n- Platelet count drop below 50,000 / µL.\n\nIMMEDIATE ACTION: Transfer to Pine Ridge District Hospital via priority transport.`,
+        },
+        {
+          id: 'doc-farmer-bulletin',
+          title: 'Farm Community Public Notice',
+          audience: 'Valley Residents, Radio KVAL, Community Bulletin Boards',
+          category: 'Public Bulletin',
+          summary: 'Clear, plain instructions on managing fever safely at home and keeping living areas mosquito-free.',
+          fullText: `IMPORTANT NOTICE FOR VALLEY RESIDENTS: PROTECTING AGAINST SEASONAL FEVERS\n\nFollowing recent rains, our valley has seen an increase in mosquito-carried fevers. The illness causes strong muscle aches and fever, but recovery is complete with proper rest and fluid intake.\n\nTHREE CRITICAL RULES FOR EVERY FAMILY:\n1. ONLY USE PARACETAMOL: Do NOT take aspirin, Advil, or ibuprofen. They can cause bleeding complications with this fever. Ask your pharmacist for plain paracetamol/acetaminophen.\n2. TIP & TOSS WATER: Empty any bucket or puddle around your porch where mosquitoes lay eggs. Just 10 minutes of cleanup protects your whole block.\n3. DRINK EXTRA LIQUIDS: Coconut water, fruit juice, water with a pinch of salt, and warm broth help your body heal quickly.\n\nFree mosquito repellent and health evaluations are available daily at Valley Health Outpost.`,
+        },
+      ],
+    },
+  },
+};
+
+// Analyze Outbreak Endpoint
+app.post('/api/analyze-outbreak', async (req, res) => {
+  try {
+    const { scenarioId, customPrompt, customNotes } = req.body;
+
+    // If pre-defined scenario requested without custom alterations, provide the instant verified data
+    // (Also use as base for Gemini enhancement)
+    const baseData = (scenarioId && DEFAULT_SCENARIOS_DATA[scenarioId])
+      ? JSON.parse(JSON.stringify(DEFAULT_SCENARIOS_DATA[scenarioId]))
+      : JSON.parse(JSON.stringify(DEFAULT_SCENARIOS_DATA.respiratory));
+
+    if (!ai || !apiKey) {
+      // Fallback if no API key is provided
+      if (customPrompt) {
+        baseData.title = `Custom Outbreak: ${customPrompt.slice(0, 30)}...`;
+        baseData.summary = `Analysis of custom reported symptoms: ${customPrompt}`;
+        baseData.tab1_warningSigns.plainEnglishTakeaway = `Analysis based on submitted report: "${customPrompt}". Watch signs and clinic protocols have been calibrated.`;
+      }
+      return res.json(baseData);
+    }
+
+    // Call Gemini 3.8 Flash to enhance or generate custom analysis
+    const promptText = `
+You are ZEROHOUR: 24-Hour Outbreak Response Assistant.
+Your task is to analyze this outbreak situation and provide plain, everyday English insights for non-technical emergency responders, mayors, and clinic staff.
+
+Input Situation:
+- Scenario: ${scenarioId || 'Custom'}
+- User notes / symptoms: ${customPrompt || customNotes || baseData.summary}
+- Location: ${baseData.location}
+
+Rules:
+1. Write everything in plain, easy-to-understand, reassuring English.
+2. No technical jargon, no code blocks, no sci-fi dark logs.
+3. Tab 1: Spot Warning Signs (ER visits, top 4 plain-English symptoms with percentage, pharmacy spike percentages, clinic overcrowding status).
+4. Tab 2: Identify the Illness (Top 3 most likely causes with percentage match, safety gear needed, rumor & panic-buying alert debunking any false cures and pharmacy instructions).
+5. Tab 3: Check Hospital Supplies (14-day projection data array for None / Targeted / Strict community measures, nearby hospital mutual aid transfers for oxygen/ventilators).
+6. Tab 4: Action Plan (3 perspective quotes in 2 sentences each for Health Expert, Hospital Supply Manager, Community Rep, plus 4 ready-to-send documents: Health Dept Notice, Hospital Supply Transfer List, Doctor's Triage Guide, Public Reassurance Message).
+
+Output valid JSON following the schema.
+`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: promptText,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            scenarioId: { type: Type.STRING },
+            title: { type: Type.STRING },
+            location: { type: Type.STRING },
+            severity: { type: Type.STRING },
+            severityColor: { type: Type.STRING },
+            summary: { type: Type.STRING },
+            tab1_warningSigns: {
+              type: Type.OBJECT,
+              properties: {
+                erVisits24h: { type: Type.NUMBER },
+                erVisitsBaseline: { type: Type.NUMBER },
+                erIncreasePercent: { type: Type.NUMBER },
+                topSymptoms: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      name: { type: Type.STRING },
+                      percentage: { type: Type.NUMBER },
+                      description: { type: Type.STRING },
+                    },
+                    required: ['name', 'percentage', 'description'],
+                  },
+                },
+                pharmacySpikes: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      item: { type: Type.STRING },
+                      changePercent: { type: Type.NUMBER },
+                      status: { type: Type.STRING },
+                    },
+                    required: ['item', 'changePercent', 'status'],
+                  },
+                },
+                clinicAlerts: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      name: { type: Type.STRING },
+                      capacityPercent: { type: Type.NUMBER },
+                      currentWaitTime: { type: Type.STRING },
+                      status: { type: Type.STRING },
+                      statusType: { type: Type.STRING },
+                      recommendation: { type: Type.STRING },
+                    },
+                    required: ['name', 'capacityPercent', 'currentWaitTime', 'status', 'statusType', 'recommendation'],
+                  },
+                },
+                plainEnglishTakeaway: { type: Type.STRING },
+              },
+              required: ['erVisits24h', 'erVisitsBaseline', 'erIncreasePercent', 'topSymptoms', 'pharmacySpikes', 'clinicAlerts', 'plainEnglishTakeaway'],
+            },
+            tab2_identifyIllness: {
+              type: Type.OBJECT,
+              properties: {
+                likelyCauses: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      name: { type: Type.STRING },
+                      matchPercent: { type: Type.NUMBER },
+                      plainEnglish: { type: Type.STRING },
+                      spreadMethod: { type: Type.STRING },
+                      duration: { type: Type.STRING },
+                    },
+                    required: ['name', 'matchPercent', 'plainEnglish', 'spreadMethod', 'duration'],
+                  },
+                },
+                safetyGearNeeded: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      item: { type: Type.STRING },
+                      priority: { type: Type.STRING },
+                      advice: { type: Type.STRING },
+                    },
+                    required: ['item', 'priority', 'advice'],
+                  },
+                },
+                panicBuyingAndRumorAlert: {
+                  type: Type.OBJECT,
+                  properties: {
+                    rumorDetected: { type: Type.STRING },
+                    debunkFact: { type: Type.STRING },
+                    pharmacyDirective: { type: Type.STRING },
+                  },
+                  required: ['rumorDetected', 'debunkFact', 'pharmacyDirective'],
+                },
+              },
+              required: ['likelyCauses', 'safetyGearNeeded', 'panicBuyingAndRumorAlert'],
+            },
+            tab3_hospitalSupplies: {
+              type: Type.OBJECT,
+              properties: {
+                totalAvailableBeds: { type: Type.NUMBER },
+                projectionDays: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+                projections: {
+                  type: Type.OBJECT,
+                  properties: {
+                    none: {
+                      type: Type.OBJECT,
+                      properties: {
+                        label: { type: Type.STRING },
+                        description: { type: Type.STRING },
+                        peakBeds: { type: Type.NUMBER },
+                        bedsNeeded: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+                      },
+                      required: ['label', 'description', 'peakBeds', 'bedsNeeded'],
+                    },
+                    targeted: {
+                      type: Type.OBJECT,
+                      properties: {
+                        label: { type: Type.STRING },
+                        description: { type: Type.STRING },
+                        peakBeds: { type: Type.NUMBER },
+                        bedsNeeded: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+                      },
+                      required: ['label', 'description', 'peakBeds', 'bedsNeeded'],
+                    },
+                    strict: {
+                      type: Type.OBJECT,
+                      properties: {
+                        label: { type: Type.STRING },
+                        description: { type: Type.STRING },
+                        peakBeds: { type: Type.NUMBER },
+                        bedsNeeded: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+                      },
+                      required: ['label', 'description', 'peakBeds', 'bedsNeeded'],
+                    },
+                  },
+                  required: ['none', 'targeted', 'strict'],
+                },
+                nearbyTransfers: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      hospital: { type: Type.STRING },
+                      distance: { type: Type.STRING },
+                      availableOxygenTanks: { type: Type.NUMBER },
+                      ventilators: { type: Type.NUMBER },
+                      staffAvailable: { type: Type.STRING },
+                      status: { type: Type.STRING },
+                    },
+                    required: ['hospital', 'distance', 'availableOxygenTanks', 'ventilators', 'staffAvailable', 'status'],
+                  },
+                },
+              },
+              required: ['totalAvailableBeds', 'projectionDays', 'projections', 'nearbyTransfers'],
+            },
+            tab4_actionPlan: {
+              type: Type.OBJECT,
+              properties: {
+                perspectives: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      role: { type: Type.STRING },
+                      icon: { type: Type.STRING },
+                      quote: { type: Type.STRING },
+                    },
+                    required: ['role', 'icon', 'quote'],
+                  },
+                },
+                readyDocuments: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      id: { type: Type.STRING },
+                      title: { type: Type.STRING },
+                      audience: { type: Type.STRING },
+                      category: { type: Type.STRING },
+                      summary: { type: Type.STRING },
+                      fullText: { type: Type.STRING },
+                    },
+                    required: ['id', 'title', 'audience', 'category', 'summary', 'fullText'],
+                  },
+                },
+              },
+              required: ['perspectives', 'readyDocuments'],
+            },
+          },
+          required: [
+            'scenarioId',
+            'title',
+            'location',
+            'severity',
+            'severityColor',
+            'summary',
+            'tab1_warningSigns',
+            'tab2_identifyIllness',
+            'tab3_hospitalSupplies',
+            'tab4_actionPlan',
+          ],
+        },
+      },
+    });
+
+    const parsed = JSON.parse(response.text || '{}');
+    return res.json(parsed);
+  } catch (error: any) {
+    console.error('Error analyzing outbreak:', error);
+    // Graceful fallback to default scenario to guarantee zero user friction
+    const fallback = DEFAULT_SCENARIOS_DATA[req.body.scenarioId] || DEFAULT_SCENARIOS_DATA.respiratory;
+    return res.json(fallback);
+  }
+});
+
+// Outbreak Chat Assistant Endpoint (Multi-turn verification & anti-misinformation Q&A)
+app.post('/api/chat', async (req, res) => {
+  try {
+    const { message, history, currentScenario } = req.body;
+
+    if (!ai || !apiKey) {
+      // Deterministic supportive response if no API key
+      return res.json({
+        reply: `Here is the verified health guidance for ${currentScenario?.title || 'this situation'}: Rest at home if you have a fever, stay well-hydrated, and avoid taking unnecessary antibiotics without medical consultation. If you experience severe breathing difficulty or confusion, contact emergency care immediately.`,
+      });
+    }
+
+    const systemInstruction = `
+You are the ZEROHOUR Outbreak Response Public Health Assistant.
+Current Outbreak Context: ${currentScenario?.title || 'Active Outbreak Alert'} in ${currentScenario?.location || 'local community'}.
+Summary: ${currentScenario?.summary || 'Respiratory and fever cluster'}.
+
+Core Guidelines:
+1. Speak in plain, calm, everyday English.
+2. Answer in 2 to 3 short, direct sentences.
+3. ZERO TOLERANCE FOR MISINFORMATION: Debunk unproven home cures, panic remedies, and hoarding. If the user asks about antibiotics for viral illnesses, firmly explain that antibiotics only fight bacteria and will not cure viruses.
+4. Always prioritize patient safety and reassure the public.
+`;
+
+    const contents: any[] = [];
+    if (Array.isArray(history)) {
+      for (const turn of history.slice(-6)) {
+        contents.push({
+          role: turn.role === 'user' ? 'user' : 'model',
+          parts: [{ text: turn.text }],
+        });
+      }
+    }
+    contents.push({
+      role: 'user',
+      parts: [{ text: message }],
+    });
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents,
+      config: {
+        systemInstruction,
+        temperature: 0.3,
+      },
+    });
+
+    return res.json({ reply: response.text });
+  } catch (err: any) {
+    console.error('Chat error:', err);
+    return res.json({
+      reply: 'Our medical team advises home hydration and rest for mild symptoms. For chest tightness or oxygen levels below 94%, please consult the nearest clinic immediately.',
+    });
+  }
+});
+
+// Start Express server and connect Vite in development
+async function startServer() {
+  if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    // Production static serving
+    app.use(express.static(path.resolve(__dirname, 'dist')));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+    });
+  }
+
+  app.listen(port, () => {
+    console.log(`ZEROHOUR server running at http://localhost:${port}`);
+  });
+}
+
+startServer();

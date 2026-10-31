@@ -1,0 +1,6 @@
+{
+  "name": "ZEROHOUR: 24-Hour Outbreak Response Assistant",
+  "description": "A clean, light-mode emergency response wizard that translates clinic surges, symptom spikes, and pharmacy trends into plain-English disease identification, bed projections, and ready-to-send notices.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
