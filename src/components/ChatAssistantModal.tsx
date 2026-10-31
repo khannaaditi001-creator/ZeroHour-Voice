@@ -1,17 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { 
-  X, 
-  Send, 
-  Bot, 
-  User, 
-  Sparkles, 
-  ShieldCheck, 
-  Volume2, 
+import {
+  X,
+  Send,
+  Bot,
+  User,
+  Volume2,
   RotateCcw,
   HelpCircle,
   Pill,
   School,
-  AlertTriangle
+  AlertTriangle,
+  Mic,
+  MicOff,
 } from 'lucide-react';
 import { OutbreakData } from '../types';
 
@@ -27,6 +27,9 @@ interface ChatAssistantModalProps {
   currentData: OutbreakData;
 }
 
+const nowTime = () =>
+  new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
 export const ChatAssistantModal: React.FC<ChatAssistantModalProps> = ({
   isOpen,
   onClose,
@@ -35,14 +38,22 @@ export const ChatAssistantModal: React.FC<ChatAssistantModalProps> = ({
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'model',
-      text: `Hello! I am your ZEROHOUR Outbreak Response Assistant. I can help verify health facts, clarify hospital triage recommendations, or debunk false rumors about the current ${currentData.title} in plain, everyday English. How can I help you right now?`,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      text: `Hello! I am your ZEROHOUR Outbreak Response Assistant. I can help verify health facts, clarify hospital triage recommendations, or debunk false rumors about the current ${currentData.title} in plain, everyday English. Tap the microphone and ask me out loud, or type your question.`,
+      time: nowTime(),
     },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [speakingIdx, setSpeakingIdx] = useState<number | null>(null);
+  const [listening, setListening] = useState(false);
+  const [voiceNote, setVoiceNote] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
+  const messagesRef = useRef<Message[]>(messages);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const quickQuestions = [
     { label: 'Are schools safe to stay open?', icon: School },
@@ -57,29 +68,60 @@ export const ChatAssistantModal: React.FC<ChatAssistantModalProps> = ({
     }
   }, [messages, loading]);
 
+  // Stop the mic and any speech when the box closes
+  useEffect(() => {
+    if (!isOpen) {
+      try {
+        recognitionRef.current?.stop();
+      } catch {
+        /* ignore */
+      }
+      window.speechSynthesis?.cancel();
+      setListening(false);
+      setSpeakingIdx(null);
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
-  const handleSend = async (messageText: string) => {
+  const speakText = (text: string, idx: number) => {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.0;
+    utterance.lang = 'en-IN';
+    utterance.onend = () => setSpeakingIdx(null);
+    utterance.onerror = () => setSpeakingIdx(null);
+    setSpeakingIdx(idx);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const handleSend = async (messageText: string, viaVoice = false) => {
     const textToSend = messageText.trim();
     if (!textToSend || loading) return;
+
+    const history = messagesRef.current.map((m) => ({ role: m.role, text: m.text }));
+    const modelIdx = messagesRef.current.length + 1;
 
     const userMessage: Message = {
       role: 'user',
       text: textToSend,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      time: nowTime(),
     };
 
     setMessages((prev) => [...prev, userMessage]);
     setInput('');
+    setVoiceNote('');
     setLoading(true);
 
+    let replyText = '';
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: textToSend,
-          history: messages.map((m) => ({ role: m.role, text: m.text })),
+          history,
           currentScenario: {
             title: currentData.title,
             location: currentData.location,
@@ -89,52 +131,119 @@ export const ChatAssistantModal: React.FC<ChatAssistantModalProps> = ({
       });
 
       const result = await response.json();
-      const modelMessage: Message = {
-        role: 'model',
-        text: result.reply || 'Our healthcare advisors recommend staying hydrated, resting at home, and consulting local clinics if fever persists over 48 hours.',
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-
-      setMessages((prev) => [...prev, modelMessage]);
+      replyText =
+        result.reply ||
+        'Our healthcare advisors recommend staying hydrated, resting at home, and consulting local clinics if fever persists over 48 hours.';
     } catch (err) {
       console.error(err);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'model',
-          text: 'Healthcare guidance: Rest at home if you have a mild fever. Avoid antibiotics for viral infections, and call your local clinic if breathing becomes difficult.',
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        },
-      ]);
-    } finally {
-      setLoading(false);
+      replyText =
+        'Healthcare guidance: Rest at home if you have a mild fever. Avoid antibiotics for viral infections, and call your local clinic if breathing becomes difficult.';
+    }
+
+    setMessages((prev) => [...prev, { role: 'model', text: replyText, time: nowTime() }]);
+    setLoading(false);
+
+    // If the question was asked by voice, answer by voice
+    if (viaVoice) {
+      speakText(replyText, modelIdx);
     }
   };
 
   const handleSpeak = (text: string, idx: number) => {
-    if ('speechSynthesis' in window) {
-      if (speakingIdx === idx) {
-        window.speechSynthesis.cancel();
-        setSpeakingIdx(null);
-        return;
-      }
+    if (!('speechSynthesis' in window)) return;
+    if (speakingIdx === idx) {
       window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.0;
-      utterance.onend = () => setSpeakingIdx(null);
-      utterance.onerror = () => setSpeakingIdx(null);
-      setSpeakingIdx(idx);
-      window.speechSynthesis.speak(utterance);
+      setSpeakingIdx(null);
+      return;
+    }
+    speakText(text, idx);
+  };
+
+  const stopListening = () => {
+    try {
+      recognitionRef.current?.stop();
+    } catch {
+      /* ignore */
+    }
+    setListening(false);
+  };
+
+  const startListening = () => {
+    const SR =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) {
+      setVoiceNote('Voice input needs Google Chrome or Microsoft Edge.');
+      return;
+    }
+    if (listening) {
+      stopListening();
+      return;
+    }
+
+    window.speechSynthesis?.cancel();
+    setSpeakingIdx(null);
+    setVoiceNote('Listening... ask your question.');
+
+    const rec = new SR();
+    rec.lang = 'en-IN';
+    rec.interimResults = true;
+    rec.continuous = false;
+
+    let sent = false;
+    let latest = '';
+
+    rec.onresult = (event: any) => {
+      let transcript = '';
+      for (let i = 0; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      latest = transcript;
+      setInput(transcript);
+      const lastResult = event.results[event.results.length - 1];
+      if (lastResult.isFinal && !sent) {
+        sent = true;
+        handleSend(transcript, true);
+      }
+    };
+
+    rec.onerror = (event: any) => {
+      setListening(false);
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        setVoiceNote('Microphone is blocked. Allow it from the lock icon next to the address bar.');
+      } else if (event.error === 'no-speech') {
+        setVoiceNote('I did not hear anything. Tap the microphone and try again.');
+      } else {
+        setVoiceNote('Voice input stopped. Tap the microphone to try again.');
+      }
+    };
+
+    rec.onend = () => {
+      setListening(false);
+      if (!sent && latest.trim()) {
+        sent = true;
+        handleSend(latest, true);
+      }
+    };
+
+    recognitionRef.current = rec;
+    setListening(true);
+    try {
+      rec.start();
+    } catch {
+      setListening(false);
     }
   };
 
   const handleResetChat = () => {
     window.speechSynthesis?.cancel();
+    stopListening();
+    setSpeakingIdx(null);
+    setVoiceNote('');
     setMessages([
       {
         role: 'model',
         text: `Conversation reset. I am ready to answer any questions about the ${currentData.title} in plain, everyday English.`,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        time: nowTime(),
       },
     ]);
   };
@@ -142,7 +251,7 @@ export const ChatAssistantModal: React.FC<ChatAssistantModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
       <div className="bg-white rounded-2xl max-w-xl w-full border border-slate-200 shadow-2xl flex flex-col h-[620px] max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-        
+
         {/* Top Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-slate-50 shrink-0">
           <div className="flex items-center space-x-2.5">
@@ -152,14 +261,14 @@ export const ChatAssistantModal: React.FC<ChatAssistantModalProps> = ({
             <div>
               <div className="flex items-center space-x-1.5">
                 <h3 className="font-bold text-slate-900 text-sm sm:text-base">
-                  ZEROHOUR AI Fact-Checker
+                  ZEROHOUR Voice Officer
                 </h3>
                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
-                  Gemini 3.8
+                  Voice + Gemini
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 font-medium">
-                Plain English • Anti-Misinformation • Outbreak Navigation
+                Ask out loud. Get a spoken answer in plain English.
               </p>
             </div>
           </div>
@@ -189,7 +298,7 @@ export const ChatAssistantModal: React.FC<ChatAssistantModalProps> = ({
           {quickQuestions.map((q, idx) => (
             <button
               key={idx}
-              onClick={() => handleSend(q.label)}
+              onClick={() => handleSend(q.label, true)}
               className="px-2.5 py-1 rounded-full bg-white hover:bg-teal-100/70 border border-teal-200 text-teal-900 text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer shrink-0 shadow-2xs"
             >
               {q.label}
@@ -261,11 +370,22 @@ export const ChatAssistantModal: React.FC<ChatAssistantModalProps> = ({
             }}
             className="flex items-center space-x-2"
           >
+            <button
+              type="button"
+              onClick={startListening}
+              className={`p-2.5 rounded-xl text-white transition-colors cursor-pointer ${
+                listening ? 'bg-red-600 hover:bg-red-700 animate-pulse' : 'bg-slate-800 hover:bg-slate-900'
+              }`}
+              title={listening ? 'Stop listening' : 'Ask by voice'}
+              aria-label={listening ? 'Stop listening' : 'Ask by voice'}
+            >
+              {listening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+            </button>
             <input
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask any question (e.g., Should clinics give antibiotics?)..."
+              placeholder="Tap the mic and speak, or type a question..."
               className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500 placeholder-slate-400"
             />
             <button
@@ -278,8 +398,10 @@ export const ChatAssistantModal: React.FC<ChatAssistantModalProps> = ({
             </button>
           </form>
           <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1.5 px-1">
-            <span>Verified answers prevent public panic and misinformation.</span>
-            <span>Escalate emergency distress to 911 / local ER</span>
+            <span className={voiceNote ? 'text-teal-700 font-semibold' : ''}>
+              {voiceNote || 'Verified answers prevent public panic and misinformation.'}
+            </span>
+            <span>Emergency distress: call 112 / local ER</span>
           </div>
         </div>
 
