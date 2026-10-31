@@ -399,7 +399,7 @@ export const ChatAssistantModal: React.FC<ChatAssistantModalProps> = ({
           </form>
           <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1.5 px-1">
             <span className={voiceNote ? 'text-teal-700 font-semibold' : ''}>
-              {voiceNote || 'Verified answers prevent public panic and misinformation.'}
+              {voiceNote || 'AI-generated guidance. Confirm with your local health authority.'}
             </span>
             <span>Emergency distress: call 112 / local ER</span>
           </div>
